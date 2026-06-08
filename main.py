@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import datetime
 import telegram as tg
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 import os
@@ -62,7 +63,7 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
     start_handler = CommandHandler('start', start)
-    message_handler = MessageHandler(filters.Text('Hi'), any_message)
+    message_handler = MessageHandler(filters.TEXT, any_message)
     aichat_handler = CommandHandler('ai_chat', ai_chat)
     endchat_handler = CommandHandler('end_chat', end_chat)
     unknown_handler = MessageHandler(filters.COMMAND, unknown)
@@ -75,7 +76,7 @@ if __name__ == '__main__':
     application.add_handler(message_handler)
 
     try:
-        application.run_polling()
+        application.run_polling(timeout= datetime.timedelta(seconds=15), bootstrap_retries= 3)
     except tg.error.TimedOut as error:
         print(f"Start-Up error: {error}")
     except tg.error.NetworkError as net_error:
