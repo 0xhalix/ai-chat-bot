@@ -50,7 +50,7 @@ async def end_chat(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         print("AI Chat session Ended")
     except tg.error.NetworkError as error:
         print(f"Message Error: {error}")
-        await context.bot.send_message(chat_id=update.effective_user.id, text= 'Failed to end chat session, Try again: {update.effective_message.text}')
+        await context.bot.send_message(chat_id=update.effective_user.id, text= f'Failed to end chat session, Try again: {update.effective_message.text}')
 
 
 
