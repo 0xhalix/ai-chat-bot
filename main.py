@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # effective_sender
 # effective_message
 
-
 async def start(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
     await context.bot.send_message(chat_id=update.effective_user.id, text= "Hello. \nI'm a bot, please talk to me!")
