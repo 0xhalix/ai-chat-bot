@@ -62,6 +62,9 @@ async def unknown(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
     await context.bot.send_message(chat_id=update.effective_user.id, text= f"Sorry, I do not understand the command {update.effective_message.text}")
 
+async def user_id(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"User: {update.effective_user.username}, equested for ID\nUser ID: {update.effective_user.id}")
+    await context.bot.send_message(chat_id= update.effective_user.id, text= f"{update.effective_user.id}")
 
 # CONVERSATION BOT
 GENDER, PHOTO, LOCATION, BIO = range(4)
@@ -154,12 +157,13 @@ async def cancel(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     start_handler = CommandHandler('start', start)
     message_handler = MessageHandler(filters.TEXT & ~filters.COMMAND, any_message)
     aichat_handler = CommandHandler('ai_chat', ai_chat)
     endchat_handler = CommandHandler('end_chat', end_chat)
+    userid_handler = CommandHandler('id', user_id)
     unknown_handler = MessageHandler(filters.COMMAND, unknown)
     
     # Converstion Handler
@@ -174,15 +178,17 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    application.add_handler(conversation_handler)
-    application.add_handler(aichat_handler)
-    application.add_handler(endchat_handler)
-    application.add_handler(start_handler)
-    application.add_handler(message_handler)
-    application.add_handler(unknown_handler)
+    app.add_handler(conversation_handler)
+    app.add_handler(aichat_handler)
+    app.add_handler(endchat_handler)
+    app.add_handler(start_handler)
+    app.add_handler(message_handler)
+    app.add_handler(userid_handler)
+    
+    app.add_handler(unknown_handler)
 
     try:
-        application.run_polling(timeout= datetime.timedelta(seconds=15), bootstrap_retries= 3)
+        app.run_polling(timeout= datetime.timedelta(seconds=15), bootstrap_retries= 3)
     except tg.error.TimedOut as error:
         print(f"Start-Up error: {error}")
     except tg.error.NetworkError as net_error:
