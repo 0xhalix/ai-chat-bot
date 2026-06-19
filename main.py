@@ -26,10 +26,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# effective_chat
-# effective_user
-# effective_sender
-# effective_message
 
 async def start(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
@@ -38,18 +34,6 @@ async def start(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 async def any_message(update:tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
     await context.bot.send_message(chat_id= update.effective_chat.id, text= 'You sent me a message')
-
-# async def ai_chat(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
-#     print(f"User: {update.effective_user.username}\nMessage: {update.effective_message.text}\nInitiate Ai guided chat")
-#     try:
-#         await context.bot.set_message_reaction(update.effective_user.id, update.effective_message.id, reaction= [tg.ReactionTypeEmoji('👨\u200d💻')])
-#     except tg.error.TelegramError as error:
-#         print(f'Emoji Error: {error}')
-#     try:
-#         await context.bot.send_message(chat_id=update.effective_user.id, text= 'Initializing Ai chat bot, Start your conversation below')
-#         print("AI chat initialization Started")
-#     except tg.error.NetworkError as error:
-#         print(f"Message Error: {error}")
 
 async def unknown(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
@@ -175,8 +159,7 @@ async def ai_chat(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     gemini_key: Optional[str] = os.getenv("GEMINI_KEY")
     print(f"User_prompt: {update.effective_message.text}")
-    prompt = update.effective_message.text
-    print(prompt)
+    prompt = update.effective_message.text if update.effective_message.text else ""
     
     def _call_gemini_sync(prompt: str, api_key: str) -> Optional[str]:
         """Sync Gemini call. Runs inside executor. Returns text or None."""
@@ -428,8 +411,7 @@ async def end_chat(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         )
     return ConversationHandler.END
     
-
-
+# Main function to run the bot
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
@@ -452,6 +434,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     
+    # AI Chat Handler
     aichat_handler =ConversationHandler(
         entry_points= [CommandHandler("ai_chat", ai_chat)],
         states= {
@@ -479,3 +462,8 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
+# effective_chat
+# effective_user
+# effective_sender
+# effective_message
