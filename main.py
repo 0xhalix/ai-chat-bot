@@ -13,7 +13,8 @@ from telegram.ext import (ApplicationBuilder,
                           filters)
 from dotenv import load_dotenv as load_env
 
-IMAGE_PATH = Path(__file__).resolve().parents[0] / "config" / "images"
+IMAGE_PATH = Path(__file__).resolve().parents[0] / "images" / "conversations"
+IMAGE_PATH.mkdir(parents=True, exist_ok=True)
 load_env()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_MODEL = "gemini-3.1-flash-lite"
