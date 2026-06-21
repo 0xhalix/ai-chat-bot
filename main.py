@@ -29,8 +29,32 @@ logger = logging.getLogger(__name__)
 
 
 async def start(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    user = update.effective_user
+    if user and user.first_name:
+        name = user.first_name
+    elif user and user.username:
+        name = f"@{user.username}"
+    else:
+        name = "there"
+        
+    msg = (
+        f"Hey {name}, welcome to the AI Chat Bot! 👋\n\n"
+        "Chat with our AI assistant in a simple, fast, and structured way. "
+        "Use it to ask questions, explore ideas, and have full conversations powered by the backend model.\n\n"
+        "To get started, complete the onboarding flow first, then begin chatting when access is enabled.\n\n"
+        "Available commands:\n"
+        "  /converse — Start the onboarding conversation\n"
+        "  /cancel — Cancel the current onboarding flow\n"
+        "  /ai_chat — Start an AI chat session\n"
+        "  /end_chat — End the current AI chat session\n"
+        "  /id — Show your Telegram user ID\n"
+        "  /help — View all available commands\n\n"
+        "Once you are set up, you can start chatting anytime."
+    )
+    
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
-    await context.bot.send_message(chat_id=update.effective_user.id, text= "Hello. \nI'm a bot, please talk to me!")
+    await context.bot.send_message(chat_id=update.effective_user.id, text= msg)
 
 async def any_message(update:tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}\n Message: {update.effective_message.text}")
@@ -42,8 +66,23 @@ async def unknown(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def user_id(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User: {update.effective_user.username}, equested for ID\nUser ID: {update.effective_user.id}")
-    await context.bot.send_message(chat_id= update.effective_user.id, text= f"{update.effective_user.id}")
     await update.effective_message.reply_text(text= f"Your user ID is {update.effective_user.id}", do_quote= True)
+
+async def help(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "AI Chat Bot — Command Reference\n\n"
+        "Getting Started\n"
+        "• /converse — Begin the onboarding process\n"
+        "• /cancel — Cancel the current onboarding process\n\n"
+        "AI Chat\n"
+        "• /ai_chat — Start a new AI chat session\n"
+        "• /end_chat — End your current AI chat session\n\n"
+        "Utility\n"
+        "• /id — Display your Telegram user ID\n"
+        "• /help — Show this command reference\n"
+        "• /start — Show the welcome message\n"
+    )
+    await update.effective_message.reply_text(text=msg, do_quote=True)
 
 # CONVERSATION BOT
 GENDER, PHOTO, LOCATION, BIO = range(4)
@@ -421,6 +460,7 @@ def main():
     aichat_handler = CommandHandler('ai_chat', ai_chat)
     endchat_handler = CommandHandler('end_chat', end_chat)
     userid_handler = CommandHandler('id', user_id)
+    help_handler = CommandHandler('help', help)
     unknown_handler = MessageHandler(filters.COMMAND, unknown)
     
     # Converstion Handler
@@ -450,6 +490,7 @@ def main():
     app.add_handler(start_handler)
     app.add_handler(message_handler)
     app.add_handler(userid_handler)
+    app.add_handler(help_handler)
     
     app.add_handler(unknown_handler)
 
