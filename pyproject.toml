@@ -16,6 +16,7 @@ dependencies = [
     "httpcore==1.0.9",
     "httpx==0.28.1",
     "idna==3.18",
+    "openrouter>=0.10.0",
     "python-dotenv==1.2.2",
     "python-telegram-bot==22.7",
     "tornado==6.5.6",

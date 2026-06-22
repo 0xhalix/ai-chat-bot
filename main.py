@@ -3,8 +3,10 @@ import logging
 import datetime
 import os
 from typing import Optional
+from openrouter import OpenRouter
 import telegram as tg
 from pathlib import Path
+from telegram.constants import ParseMode
 from telegram.ext import (ApplicationBuilder,
                           ContextTypes,
                           CommandHandler,
@@ -17,6 +19,9 @@ IMAGE_PATH = Path(__file__).resolve().parents[0] / "images" / "conversations"
 IMAGE_PATH.mkdir(parents=True, exist_ok=True)
 load_env()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+AI_MODEL = "openrouter/auto"
+MODEL_MAX_TRIES = 3
+MODEL_TIMEOUT_SEC = 120
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_TIMEOUT_SEC = 120
 GEMINI_MAX_TRIES = 2
@@ -197,9 +202,67 @@ async def ai_chat(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     return RESPONSE
         
 async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
+    openrouter_key: Optional[str] = os.getenv("OPENROUTER_KEY")
     gemini_key: Optional[str] = os.getenv("GEMINI_KEY")
     print(f"User_prompt: {update.effective_message.text}")
-    prompt = update.effective_message.text if update.effective_message.text else ""
+    prompt = [{"role": "user", "content": update.effective_message.text if update.effective_message.text else ""}]
+    
+    def _call_model_sync(prompt: str, api_key:str) -> Optional[str]:
+        try:
+            from openrouter import OpenRouter 
+            client = OpenRouter(api_key=api_key)
+            model_config = None
+            
+            
+            # with OpenRouter(api_key=api_key) as client:
+            #     response = client.chat.send(
+            #     model="~openai/gpt-latest",
+            #     messages=[
+            #         {"role": "user", "content": "What is the meaning of life?"}
+            #     ],
+            # )
+            # print(response.choices[0].message.content)
+            
+            kwargs: dict = {
+                "model": AI_MODEL,
+                "messages": prompt,
+            }
+            if model_config is not None:
+                kwargs["config"] = model_config
+                
+            response = client.chat.send(**kwargs)
+            print(f"response = {response.choices[0].message.content[:50]}")
+            
+            text = getattr(response.choices[0].message, "content", None)
+            if text and text.strip():
+                return text.strip()
+            logger.warning("OpenRouter returned empty text")
+            return None
+        except Exception as exc:
+            logger.warning(f"OpenRouter sync call failed: {exc}")
+            
+    
+    async def _call_model(prompt: str, api_key: str) -> Optional[str]:
+        """Async wrapper for Gemini. Up to GEMINI_MAX_TRIES attempts."""
+        loop = asyncio.get_event_loop()
+        for attempt in range(1, MODEL_MAX_TRIES + 1):
+            try:
+                text = await asyncio.wait_for(
+                    loop.run_in_executor(None, _call_model_sync, prompt, api_key),
+                    timeout=MODEL_TIMEOUT_SEC,
+                )
+                if text:
+                    logger.info(f"Openrouter success on attempt {attempt} (len={len(text)})")
+                    return text
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Openrouter attempt {attempt}/{MODEL_MAX_TRIES}: timeout after {MODEL_TIMEOUT_SEC}s",
+                )
+            except Exception as exc:
+                logger.warning(f"Openrouter attempt {attempt}/{MODEL_MAX_TRIES}: error: {exc}")
+
+        return None
+       
     
     def _call_gemini_sync(prompt: str, api_key: str) -> Optional[str]:
         """Sync Gemini call. Runs inside executor. Returns text or None."""
@@ -417,16 +480,16 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                         disable_web_page_preview=True,
                     )
         
-    if gemini_key:
+    if openrouter_key:
         try:
-            result = await _call_gemini(prompt, gemini_key)
+            result = await _call_model(prompt, openrouter_key)
         except Exception as exc:
-            logger.warning(f"Gemini raised error: {exc}")
+            logger.warning(f"Openrouter raised error: {exc}")
             await context.bot.set_message_reaction(update.effective_user.id, update.effective_message.id, reaction= [tg.ReactionTypeEmoji('😢')])
             await update.message.reply_text(text=f"AI model raised error: {exc}\nPlease try the prompt again.", do_quote= True)
             result = None
         if result is not None:
-            await _safe_reply(update, context, result, parse_mode=None, disable_web_page_preview=False)
+            await _safe_reply(update, context, result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=False)
         
     return RESPONSE
     
