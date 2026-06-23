@@ -5,7 +5,7 @@
 Production-ready tools for crypto bot with:
 - Calculator: Precise arithmetic, unit conversion
 - Database: Query host SQL database (PostgreSQL/MySQL)
-- Web Search: Google Custom Search API integration
+- Web Search: SerpAPI integration (Google, Bing, DuckDuckGo, Baidu)
 """
 
 import json
@@ -22,8 +22,7 @@ from datetime import datetime
 """
 Required environment variables in your .env:
 
-GOOGLE_CUSTOM_SEARCH_API_KEY=your_api_key_here
-GOOGLE_SEARCH_ENGINE_ID=your_cse_id_here
+SERPAPI_API_KEY=your_serpapi_key_here
 DB_HOST=localhost (or your host server IP)
 DB_PORT=5432 (PostgreSQL) or 3306 (MySQL)
 DB_USER=your_db_user
@@ -62,17 +61,23 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web using Google Custom Search API. Returns top results with titles, snippets, and URLs.",
+            "description": "Search the web using SerpAPI. Supports Google, Bing, DuckDuckGo, Baidu. Returns real-time results with titles, snippets, and URLs. Perfect for crypto/finance news and data.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query (e.g., 'Bitcoin price CoinDesk', 'Ethereum gas fees today')"
+                        "description": "Search query (e.g., 'Bitcoin price today', 'Ethereum merge news', 'crypto regulations')"
+                    },
+                    "engine": {
+                        "type": "string",
+                        "description": "Search engine to use",
+                        "enum": ["google", "bing", "duckduckgo", "baidu"],
+                        "default": "google"
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Number of results to return (1-10)",
+                        "description": "Number of results to return (1-100)",
                         "default": 5
                     }
                 },
@@ -168,86 +173,184 @@ def calculator(expression: str, description: str = "") -> str:
 
 
 # ============================================================
-# WEB SEARCH TOOL (Google Custom Search)
+# WEB SEARCH TOOL (SerpAPI)
 # ============================================================
 
-class GoogleSearchClient:
-    """Google Custom Search API client."""
+class SerpAPIClient:
+    """SerpAPI client for multi-engine web search."""
     
     def __init__(self):
-        self.api_key = os.getenv("GOOGLE_CUSTOM_SEARCH_API_KEY")
-        self.search_engine_id = os.getenv("GOOGLE_SEARCH_ENGINE_ID")
-        self.base_url = "https://www.googleapis.com/customsearch/v1"
+        self.api_key = os.getenv("SERPAPI_API_KEY")
+        self.base_url = "https://serpapi.com/search"
         
-        if not self.api_key or not self.search_engine_id:
+        if not self.api_key:
             raise ValueError(
-                "Missing Google Search credentials. Set:\n"
-                "GOOGLE_CUSTOM_SEARCH_API_KEY\n"
-                "GOOGLE_SEARCH_ENGINE_ID"
+                "Missing SerpAPI credentials. Set:\n"
+                "SERPAPI_API_KEY (get free API key at https://serpapi.com)"
             )
     
-    def search(self, query: str, max_results: int = 5) -> str:
+    def search(
+        self,
+        query: str,
+        engine: str = "google",
+        max_results: int = 5
+    ) -> str:
         """
-        Search using Google Custom Search.
+        Search using SerpAPI.
         
         Args:
             query: Search query
-            max_results: Number of results (1-10)
+            engine: Search engine ('google', 'bing', 'duckduckgo', 'baidu')
+            max_results: Number of results (1-100)
         
         Returns:
             Formatted search results as string
         """
         try:
+            # Validate engine
+            valid_engines = ["google", "bing", "duckduckgo", "baidu"]
+            if engine not in valid_engines:
+                engine = "google"
+            
             params = {
                 "q": query,
-                "key": self.api_key,
-                "cx": self.search_engine_id,
-                "num": min(max_results, 10)  # API limit is 10
+                "engine": engine,
+                "api_key": self.api_key,
+                "num": min(max_results, 100),  # SerpAPI supports up to 100
+                "timeout": 10
             }
             
             response = requests.get(
                 self.base_url,
                 params=params,
-                timeout=10
+                timeout=15
             )
             response.raise_for_status()
             data = response.json()
             
-            # Parse results
-            results = []
-            if "items" in data:
-                for item in data["items"][:max_results]:
-                    results.append({
-                        "title": item.get("title", ""),
-                        "url": item.get("link", ""),
-                        "snippet": item.get("snippet", ""),
-                    })
+            # Check for errors
+            if "error" in data:
+                return f"ERROR: SerpAPI error - {data['error']}"
             
-            if not results:
-                return f"No results found for: {query}"
+            # Parse results based on engine
+            results = []
+            
+            if engine == "google":
+                if "organic_results" in data:
+                    for item in data["organic_results"][:max_results]:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                            "position": item.get("position", ""),
+                        })
+            
+            elif engine == "bing":
+                if "organic_results" in data:
+                    for item in data["organic_results"][:max_results]:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                        })
+            
+            elif engine == "duckduckgo":
+                if "organic_results" in data:
+                    for item in data["organic_results"][:max_results]:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                        })
+            
+            elif engine == "baidu":
+                if "organic_results" in data:
+                    for item in data["organic_results"][:max_results]:
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                        })
             
             # Format output
-            output = f"Search Results for: {query}\n\n"
-            for i, result in enumerate(results, 1):
-                output += f"{i}. {result['title']}\n"
-                output += f"   URL: {result['url']}\n"
-                output += f"   {result['snippet']}\n\n"
+            output = f"Search Results for: {query} (via {engine.capitalize()})\n"
+            output += "=" * 70 + "\n\n"
+            
+            # Include AI Overview if available (Google specific)
+            if "ai_overview" in data and engine == "google":
+                output += self._format_ai_overview(data["ai_overview"])
+                output += "\n" + "-" * 70 + "\n\n"
+            
+            # Include organic search results
+            if results:
+                output += "ORGANIC RESULTS:\n\n"
+                for i, result in enumerate(results, 1):
+                    output += f"{i}. {result['title']}\n"
+                    output += f"   URL: {result['url']}\n"
+                    if result.get('snippet'):
+                        output += f"   {result['snippet']}\n"
+                    output += "\n"
+            else:
+                output += "No traditional search results found for this query.\n"
             
             return output
         
         except requests.exceptions.Timeout:
             return "ERROR: Search request timed out"
+        except requests.exceptions.HTTPError as e:
+            return f"ERROR: HTTP error - {e.response.status_code}"
         except requests.exceptions.RequestException as e:
             return f"ERROR: Search failed - {str(e)}"
         except Exception as e:
             return f"ERROR: {str(e)}"
+    
+    def _format_ai_overview(self, overview: dict) -> str:
+        """Format AI overview data into readable text."""
+        try:
+            output = "📋 AI OVERVIEW:\n\n"
+            
+            # Process text blocks
+            if "text_blocks" in overview:
+                for block in overview["text_blocks"]:
+                    block_type = block.get("type", "paragraph")
+                    snippet = block.get("snippet", "")
+                    
+                    if block_type == "paragraph":
+                        output += f"{snippet}\n\n"
+                    
+                    elif block_type == "heading":
+                        output += f"**{snippet}**\n"
+                    
+                    elif block_type == "list":
+                        list_items = block.get("list", [])
+                        for item in list_items:
+                            title = item.get("title", "")
+                            snippet_item = item.get("snippet", "")
+                            output += f"  • {title} {snippet_item}\n"
+                        output += "\n"
+            
+            # Add references/sources
+            if "references" in overview:
+                output += "\n📚 SOURCES:\n"
+                for ref in overview["references"][:5]:  # Limit to 5 refs
+                    title = ref.get("title", "")
+                    link = ref.get("link", "")
+                    source = ref.get("source", "")
+                    output += f"  • {title}\n"
+                    output += f"    ({source})\n"
+                    output += f"    {link}\n"
+            
+            return output
+        
+        except Exception as e:
+            return f"[Overview formatting error: {str(e)}]\n"
 
 
-def web_search(query: str, max_results: int = 5) -> str:
-    """Wrapper for web search."""
+def web_search(query: str, engine: str = "google", max_results: int = 5) -> str:
+    """Wrapper for web search with SerpAPI."""
     try:
-        client = GoogleSearchClient()
-        return client.search(query, max_results)
+        client = SerpAPIClient()
+        return client.search(query, engine, max_results)
     except ValueError as e:
         return f"ERROR: {str(e)}"
 

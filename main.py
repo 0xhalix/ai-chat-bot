@@ -207,6 +207,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     openrouter_key: Optional[str] = os.getenv("OPENROUTER_KEY")
     gemini_key: Optional[str] = os.getenv("GEMINI_KEY")
     deepseek_key: Optional[str] = os.getenv("DEEPSEEK_KEY")
+    serp_key: Optional[str] = os.getenv("SERPAPI_KEY")
     hf_key: Optional[str] = os.getenv("HF_KEY")
     api_url = "https://router.huggingface.co/v1"
     print(f"User_prompt: {update.effective_message.text}")
@@ -476,13 +477,18 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                             "type": "string",
                             "description": "Search query"
                         },
+                        "engine": {
+                            "type": "string",
+                            "description": "Search engine to use (google, bing, duckduckgo)",
+                            "default": "google"
+                        },
                         "max_results": {
                             "type": "integer",
                             "description": "Maximum number of results",
-                            "default": 5
+                            "default": 6
                         }
                     },
-                    "required": ["query"]
+                    "required": ["query", "engine"]
                 }
             }
         },
@@ -521,21 +527,149 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             return f"ERROR: {str(e)}"
 
-
-    def web_search(query: str, max_results: int = 5) -> str:
-        """
-        Search the web. 
-        NOTE: This is a placeholder - implement with actual search API
-        (e.g., SerpAPI, Google Custom Search, Bing)
-        """
+    def web_search(query: str, engine: str = "google", max_results: int = 10) -> str:
         try:
-            # Placeholder: You'd use a real search API here
-            # Example with requests to a search engine:
-            # results = requests.get(f"https://api.search.com/search?q={query}").json()
-            return f"Search results for '{query}' (placeholder - integrate actual search API)"
+            class SerpAPIClient:
+                def __init__(self):
+                    self.api_key = serp_key
+                    self.base_url = "https://serpapi.com/search"
+                    
+                    if not self.api_key:
+                        raise ValueError(
+                            "Missing SerpAPI credentials. Set:\n"
+                            "SERPAPI_KEY (get free API key at https://serpapi.com)"
+                        )
+                
+                def search(self, query: str, engine: str = "google", max_results: int = 10) -> str:
+                    try:
+                        valid_engines = ["google", "bing", "duckduckgo"]
+                        if engine not in valid_engines:
+                            engine = "google"
+                        
+                        params = {
+                            "q": query,
+                            "engine": engine,
+                            "api_key": self.api_key,
+                            "location": "United States",
+                            "google_domain": "google.com",
+                            "hl": "en",
+                            "gl": "us"
+                        }
+                        
+                        response = requests.get(self.base_url, params=params, timeout=15)
+                        response.raise_for_status()
+                        data = response.json()
+                        
+                        if "error" in data:
+                            return f"ERROR: SerpAPI error - {data['error']}"
+                        
+                        results = []
+                        
+                        if engine == "google":
+                            if "answer_box" in data:
+                                results.append({
+                                    "title": "Answer Box",
+                                    "snippet": data["answer_box"].get("snippet", ""),
+                                    "highlight": data["answer_box"].get("snippet_highlighted_words", "")
+                                })
+
+                            if "organic_results" in data:
+                                for item in data["organic_results"][:max_results]:
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": item.get("link", ""),
+                                        "snippet": item.get("snippet", ""),
+                                        "position": item.get("position", ""),
+                                    })
+                        
+                        elif engine == "bing":
+                            if "organic_results" in data:
+                                for item in data["organic_results"][:max_results]:
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": item.get("link", ""),
+                                        "snippet": item.get("snippet", ""),
+                                    })
+                        
+                        elif engine == "duckduckgo":
+                            if "organic_results" in data:
+                                for item in data["organic_results"][:max_results]:
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": item.get("link", ""),
+                                        "snippet": item.get("snippet", ""),
+                                    })
+                        
+                        if not results:
+                            return f"No results found for '{query}' on {engine}"
+                        
+                        if "ai_overview" in data and engine == "google":
+                            output += self._format_ai_overview(data["ai_overview"])
+                            output += "\n" + "-" * 70 + "\n\n"
+                        
+                        output = f"Search Results for: {query} (via {engine.capitalize()})\n\n"
+                        for i, result in enumerate(results, 1):
+                            output += f"{i}. {result['title']}\n"
+                            output += f"   URL: {result['url']}\n"
+                            if result.get('snippet'):
+                                output += f"   {result['snippet']}\n"
+                            output += "\n"
+                        
+                        return output
+                    except requests.exceptions.Timeout:
+                        return "ERROR: Search request timed out"
+                    except requests.exceptions.HTTPError as e:
+                        return f"ERROR: HTTP error - {e.response.status_code}"
+                    except requests.exceptions.RequestException as e:
+                        return f"ERROR: Search failed - {str(e)}"
+                    except Exception as e:
+                        return f"ERROR: {str(e)}"
+                
+                def _format_ai_overview(self, overview: dict) -> str:
+                    """Format AI overview data into readable text."""
+                    try:
+                        output = "📋 AI OVERVIEW:\n\n"
+                        if "text_blocks" in overview:
+                            for block in overview["text_blocks"]:
+                                block_type = block.get("type", "paragraph")
+                                snippet = block.get("snippet", "")
+                                
+                                if block_type == "paragraph":
+                                    output += f"{snippet}\n\n"
+                                
+                                elif block_type == "heading":
+                                    output += f"**{snippet}**\n"
+                                
+                                elif block_type == "list":
+                                    list_items = block.get("list", [])
+                                    for item in list_items:
+                                        title = item.get("title", "")
+                                        snippet_item = item.get("snippet", "")
+                                        output += f"  • {title} {snippet_item}\n"
+                                    output += "\n"
+                        
+                        # Add references/sources
+                        if "references" in overview:
+                            output += "\n📚 SOURCES:\n"
+                            for ref in overview["references"][:5]:  # Limit to 5 refs
+                                title = ref.get("title", "")
+                                link = ref.get("link", "")
+                                source = ref.get("source", "")
+                                output += f"  • {title}\n"
+                                output += f"    ({source})\n"
+                                output += f"    {link}\n"
+                        
+                        return output
+                    except Exception as e:
+                        return f"[Overview formatting error: {str(e)}]\n"
+
+            try:
+                client = SerpAPIClient()
+                return client.search(query, engine, max_results)
+            except ValueError as e:
+                return f"ERROR: {str(e)}"
         except Exception as e:
             return f"ERROR: {str(e)}"
-
 
     def read_website_html_at_url(url: str) -> str:
         """Fetch HTML content from a URL."""
@@ -565,7 +699,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 "tools": TOOLS,  # <-- Pass tools here
                 "tool_choice": "auto",  # Let model decide when to use tools
                 "stream": False,
-                # "reasoning_effort": "high",
+                "reasoning_effort": "high",
                 "extra_body": {"thinking": {"type": "enabled"}}
             }
                 
@@ -655,7 +789,6 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 
         return None
        
-    
     def _call_gemini_sync(prompt: str, api_key: str) -> Optional[str]:
         """Sync Gemini call. Runs inside executor. Returns text or None."""
         try:
@@ -689,7 +822,6 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Gemini sync call failed: {exc}")
             return None
 
-
     async def _call_gemini(prompt: str, api_key: str) -> Optional[str]:
         """Async wrapper for Gemini. Up to GEMINI_MAX_TRIES attempts."""
         loop = asyncio.get_event_loop()
@@ -710,8 +842,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Gemini attempt {attempt}/{GEMINI_MAX_TRIES}: error: {exc}")
 
         return None
-
-        
+   
     def _chunk_text(text: str, limit: int = SAFE_MSG_LIMIT) -> list[str]:
         if len(text) <= limit:
             return [text]
@@ -955,7 +1086,6 @@ def main():
         print(f"Start-Up error: {error}")
     except tg.error.NetworkError as net_error:
         print(f"Network Error: {net_error}")
-
 
 if __name__ == '__main__':
     main()
