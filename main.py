@@ -450,63 +450,57 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     TOOLS = [
         {
             "type": "function",
-            "function": {
-                "name": "python_executor",
-                "description": "Execute Python code and return stdout + stderr.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "Python code to execute"
-                        }
-                    },
-                    "required": ["code"]
-                }
+            "name": "python_executor",
+            "description": "Execute Python code and return stdout + stderr.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute"
+                    }
+                },
+                "required": ["code"]
             }
         },
         {
             "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for current facts and citations.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query"
-                        },
-                        "engine": {
-                            "type": "string",
-                            "description": "Search engine to use (google, bing, duckduckgo)",
-                            "default": "google"
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Maximum number of results",
-                            "default": 6
-                        }
+            "name": "web_search",
+            "description": "Search the web for current facts and citations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
                     },
-                    "required": ["query", "engine"]
-                }
+                    "engine": {
+                        "type": "string",
+                        "description": "Search engine to use (google, bing, duckduckgo)",
+                        "default": "google"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results",
+                        "default": 6
+                    }
+                },
+                "required": ["query", "engine"]
             }
         },
         {
             "type": "function",
-            "function": {
-                "name": "read_website_html_at_url",
-                "description": "Fetch and return HTML content from a URL.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "description": "The URL to fetch"
-                        }
-                    },
-                    "required": ["url"]
-                }
+            "name": "read_website_html_at_url",
+            "description": "Fetch and return HTML content from a URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to fetch"
+                    }
+                },
+                "required": ["url"]
             }
         }
     ]
@@ -676,7 +670,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()
-            return response.text[:5000]  # Limit to first 5000 chars
+            return response.text
         except Exception as e:
             return f"ERROR fetching {url}: {str(e)}"
     
@@ -686,6 +680,52 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 "read_website_html_at_url": read_website_html_at_url,
             }
     
+    def _build_input_from_prompt(prompt: list[dict]) -> tuple[str, str]:
+        system_instructions = ""
+        user_parts = []
+        
+        for msg in prompt:
+            role = msg.get("role", "user").lower()
+            content = msg.get("content", "").strip()
+            
+            if not content:
+                continue
+            
+            if role == "system":
+                if system_instructions:
+                    system_instructions += f"\n\n{content}"
+                else:
+                    system_instructions = content
+            elif role in ("user", "assistant"):
+                user_parts.append(content)
+        user_input = "\n\n".join(user_parts) if user_parts else ""
+        
+        return system_instructions, user_input
+
+    def _execute_tool_call(step) -> str:
+        try:
+            tool_name = step.name
+            tool_args = step.arguments if hasattr(step, "arguments") else {}
+            
+            print(f"    → Calling: {tool_name}({tool_args})")
+            if tool_name not in TOOL_REGISTRY:
+                return f"ERROR: Unknown tool '{tool_name}'"
+
+            try:
+                result = TOOL_REGISTRY[tool_name](**tool_args)
+                if isinstance(result, (dict, list)):
+                    result_str = json.dumps(result, indent=2)
+                else:
+                    result_str = str(result)
+                
+                return result_str
+            except TypeError as e:
+                return f"ERROR: Invalid arguments for {tool_name}: {str(e)}"
+            except Exception as e:
+                return f"ERROR: Tool execution failed: {str(e)}"
+        except Exception as e:
+            return f"ERROR: Failed to process tool call: {str(e)}"
+
     def _call_model_sync(prompt: list[dict], api_key:str, api_url: str, model: str, max_tool_calls: int = 10) -> Optional[str]:
         try:
             from openai import OpenAI
@@ -696,8 +736,8 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
             kwargs = {
                 "model": model,
                 "messages": prompt,
-                "tools": TOOLS,  # <-- Pass tools here
-                "tool_choice": "auto",  # Let model decide when to use tools
+                "tools": TOOLS,
+                "tool_choice": "auto",
                 "stream": False,
                 "reasoning_effort": "high",
                 "extra_body": {"thinking": {"type": "enabled"}}
@@ -738,7 +778,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                         else:
                             tool_result = f"ERROR: Unknown tool {tool_name}"
                             
-                        print(f"  ← Result: {tool_result[:100]}...")
+                        print(f"  ← Result: {tool_result}...")
                             
                         prompt.append({
                             "role": "tool",
@@ -789,46 +829,83 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 
         return None
        
-    def _call_gemini_sync(prompt: str, api_key: str) -> Optional[str]:
-        """Sync Gemini call. Runs inside executor. Returns text or None."""
+    def _call_gemini_sync(model_name: str, api_key: str, prompt: list[dict], thinking_level: str = "high", max_tool_calls: int = 10) -> Optional[str]:
         try:
-            import google.genai as genai 
+            import google.genai as genai
             client = genai.Client(api_key=api_key)
-            gen_config = None
             
-            try:
-                from google.genai import types as genai_types
-                gen_config = genai_types.GenerateContentConfig(thinking_config=genai_types.ThinkingConfig(thinking_level="high"))
-            except Exception as e:
-                print(e)
-
-            kwargs: dict = {
-                "model": GEMINI_MODEL,
-                "contents": prompt,
-            }
-            if gen_config is not None:
-                kwargs["config"] = gen_config
-
-            response = client.models.generate_content(**kwargs)
-            print(f"response = {response.text[:50]}")
+            system_instructions, user_input = _build_input_from_prompt(prompt) 
+            print(f"[Gemini Interaction] Model: {model_name}, Thinking: {thinking_level}")
             
-        
-            text = getattr(response, "text", None)
-            if text and text.strip():
-                return text.strip()
-            logger.warning("Gemini returned empty text")
+            tool_call_count = 0
+            while tool_call_count < max_tool_calls:
+                print(f"\n[API Call #{tool_call_count + 1}]")
+                
+                interaction = client.interactions.create(
+                    model=model_name,
+                    input=user_input,
+                    system_instruction=system_instructions if system_instructions else None,
+                    tools=TOOLS, 
+                    generation_config={
+                        "thinking_level": thinking_level,
+                        "temperature": 0.7,
+                    },
+                    previous_interaction_id=interaction_id if interaction_id else None
+                )
+                
+                interaction_id = interaction.id
+                has_tool_calls = False
+                final_text = None
+                print(f"{interaction}\n\n")
+                
+                for step in interaction.steps:
+                    print(f"Model wants to use {len(interaction.steps)} tool(s)")
+                    if step.type == "function_call":
+                        print(step.name)
+                        has_tool_calls = True
+                        result = _execute_tool_call(step)
+                        print(f"  ✓ Executed: {step.name}()")
+                        
+                        user_input += f"\n\n[Tool Result: {step.name}]\n{result}"
+                        tool_call_count += 1
+                    
+                    elif hasattr(step, "content") and step.content:
+                        for part in step.content:
+                            if hasattr(part, "text") and part.text:
+                                final_text = part.text
+                                print(f"  → Response: {part.text[:80]}...")
+                
+                if not has_tool_calls and final_text is not None:
+                    print(f"\n[Complete] Iterations: {tool_call_count + 1}")
+                    return final_text
+                
+                if has_tool_calls:
+                    continue
+                
+                if final_text:
+                    return final_text
+                
+                print("  ⚠ No response or tool calls found")
+                break
+            print(f"⚠ Max iterations ({max_tool_calls}) reached")
             return None
-        except Exception as exc:
-            logger.warning(f"Gemini sync call failed: {exc}")
+        except ImportError:
+            print("ERROR: google-generativeai library required")
+            print("Install with: pip install google-generativeai")
+            return None
+        except Exception as e:
+            print(f"ERROR: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
-    async def _call_gemini(prompt: str, api_key: str) -> Optional[str]:
+    async def _call_gemini(prompt: str, api_key: str, model: str) -> Optional[str]:
         """Async wrapper for Gemini. Up to GEMINI_MAX_TRIES attempts."""
         loop = asyncio.get_event_loop()
         for attempt in range(1, GEMINI_MAX_TRIES + 1):
             try:
                 text = await asyncio.wait_for(
-                    loop.run_in_executor(None, _call_gemini_sync, prompt, api_key),
+                    loop.run_in_executor(None, _call_gemini_sync, model, api_key, prompt),
                     timeout=GEMINI_TIMEOUT_SEC,
                 )
                 if text:
@@ -870,14 +947,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
 
         return chunks
 
-    async def _send_chunks(
-        update: tg.Update,
-        context: ContextTypes.DEFAULT_TYPE,
-        text: str,
-        parse_mode: Optional[str],
-        disable_web_page_preview: bool,
-        ) -> None:
-        
+    async def _send_chunks(update: tg.Update, context: ContextTypes.DEFAULT_TYPE, text: str, parse_mode: Optional[str], disable_web_page_preview: bool) -> None:
         chunks = _chunk_text(text, SAFE_MSG_LIMIT)
         logger.info(
             f"Telegram chunking: len={len(text)} chunks={len(chunks)} parse_mode={parse_mode}",
@@ -887,7 +957,6 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         failed_chunks: list[int] = []
-
         for i, chunk in enumerate(chunks):
             try:
                 if i == 0 and update.message is not None:
@@ -1003,11 +1072,11 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                         disable_web_page_preview=True,
                     )
         
-    if hf_key:
+    if gemini_key:
         try:
-            result = await _call_model(prompt, hf_key, api_url, AI_MODEL)
+            result = await _call_gemini(prompt, hf_key, AI_MODEL)
         except Exception as exc:
-            logger.warning(f"HF model raised error: {exc}")
+            logger.warning(f"Gemini model raised error: {exc}")
             await context.bot.set_message_reaction(update.effective_user.id, update.effective_message.id, reaction= [tg.ReactionTypeEmoji('😢')])
             await update.message.reply_text(text=f"AI model raised error: {exc}\nPlease try the prompt again.", do_quote= True)
             result = None

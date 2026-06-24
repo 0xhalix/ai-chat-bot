@@ -551,6 +551,348 @@ TOOL_REGISTRY = {
 
 
 # ============================================================
+# GOOGLE GEMINI TOOLS SUPPORT (Interactions API)
+# ============================================================
+"""
+Modern implementation using Google's Interactions API.
+Provides automatic tool handling with max thinking level.
+
+Compatible with OpenAI tool format - no conversion needed.
+"""
+
+def chat_with_gemini_tools(
+    model_name: str,
+    api_key: str,
+    messages: list[dict],
+    thinking_level: str = "high",
+    max_tool_iterations: int = 5,
+) -> Optional[str]:
+    try:
+        import google.genai as genai
+        client = genai.Client(api_key=api_key)
+        
+        system_instructions, user_input = _build_input_from_messages(messages) 
+        print(f"[Gemini Interaction] Model: {model_name}, Thinking: {thinking_level}")
+        iteration = 0
+        
+        while iteration < max_tool_iterations:
+            iteration += 1
+            print(f"\n[Iteration {iteration}/{max_tool_iterations}]")
+            
+            interaction = client.interactions.create(
+                model=model_name,
+                input=user_input,
+                system_instruction=system_instructions if system_instructions else None,
+                tools=TOOLS, 
+                generation_config={
+                    "thinking_level": thinking_level,
+                    "temperature": 0.7,
+                },
+                previous_interaction_id=interaction_id if interaction_id else None
+            )
+            
+            interaction_id = interaction.id
+            has_tool_calls = False
+            final_text = None
+            print(f"{interaction}\n\n")
+            
+            for step in interaction.steps:
+                if step.type == "function_call":
+                    has_tool_calls = True
+                    result = _execute_tool_call(step)
+                    print(f"  ✓ Executed: {step.name}()")
+                    
+                    user_input += f"\n\n[Tool Result: {step.name}]\n{result}"
+                
+                elif hasattr(step, "content") and step.content:
+                    for part in step.content:
+                        if hasattr(part, "text") and part.text:
+                            final_text = part.text
+                            print(f"  → Response: {part.text[:80]}...")
+            
+            if not has_tool_calls and final_text is not None:
+                print(f"\n[Complete] Iterations: {iteration}")
+                return final_text
+            
+            if has_tool_calls:
+                continue
+            
+            if final_text:
+                return final_text
+            
+            print("  ⚠ No response or tool calls found")
+            break
+        print(f"⚠ Max iterations ({max_tool_iterations}) reached")
+        return None
+    except ImportError:
+        print("ERROR: google-generativeai library required")
+        print("Install with: pip install google-generativeai")
+        return None
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _build_input_from_messages(messages: list[dict]) -> tuple[str, str]:
+    system_instructions = ""
+    user_parts = []
+    
+    for msg in messages:
+        role = msg.get("role", "user").lower()
+        content = msg.get("content", "").strip()
+        
+        if not content:
+            continue
+        
+        if role == "system":
+            if system_instructions:
+                system_instructions += f"\n\n{content}"
+            else:
+                system_instructions = content
+        elif role in ("user", "assistant"):
+            user_parts.append(content)
+    user_input = "\n\n".join(user_parts) if user_parts else ""
+    
+    return system_instructions, user_input
+
+
+def _execute_tool_call(step) -> str:
+    try:
+        tool_name = step.name
+        tool_args = step.arguments if hasattr(step, "arguments") else {}
+        
+        print(f"    → Calling: {tool_name}({tool_args})")
+        if tool_name not in TOOL_REGISTRY:
+            return f"ERROR: Unknown tool '{tool_name}'"
+
+        try:
+            result = TOOL_REGISTRY[tool_name](**tool_args)
+            if isinstance(result, (dict, list)):
+                result_str = json.dumps(result, indent=2)
+            else:
+                result_str = str(result)
+            
+            return result_str
+        except TypeError as e:
+            return f"ERROR: Invalid arguments for {tool_name}: {str(e)}"
+        except Exception as e:
+            return f"ERROR: Tool execution failed: {str(e)}"
+    except Exception as e:
+        return f"ERROR: Failed to process tool call: {str(e)}"
+
+
+### Legacy Gemini api call code
+
+def _python_type_to_gemini(python_type: str):
+    """Convert Python type string to Gemini Schema Type."""
+    from google.genai import types as genai_types
+        
+    type_map = {
+        "string": genai_types.Type.STRING,
+        "integer": genai_types.Type.INTEGER,
+        "number": genai_types.Type.NUMBER,
+        "boolean": genai_types.Type.BOOLEAN,
+        "object": genai_types.Type.OBJECT,
+        "array": genai_types.Type.ARRAY,
+    }
+        
+    return type_map.get(python_type, genai_types.Type.STRING)
+
+def convert_openai_tools_to_gemini():
+    try:
+        from google.genai import types as genai_types
+            
+        gemini_tools = []
+        for tool in TOOLS:
+            if tool["type"] != "function":
+                continue
+                
+            func = tool["function"]
+                
+            params = func.get("parameters", {})
+            properties = params.get("properties", {})
+            required = params.get("required", [])
+                
+                
+            param_schema = {}
+            for prop_name, prop_info in properties.items():
+                param_schema[prop_name] = {
+                    "type": prop_info.get("type", "string"),
+                    "description": prop_info.get("description", ""),
+                }
+
+                if "enum" in prop_info:
+                    param_schema[prop_name]["enum"] = prop_info["enum"]
+
+                if "default" in prop_info:
+                    param_schema[prop_name]["default"] = prop_info["default"]
+
+            func_decl = genai_types.FunctionDeclaration(
+                name=func["name"],
+                description=func["description"],
+                parameters=genai_types.Schema(
+                    type=genai_types.Type.OBJECT,
+                    properties={
+                        name: genai_types.Schema(
+                            type=_python_type_to_gemini(prop["type"]),
+                            description=prop.get("description", ""),
+                            enum=prop.get("enum"),
+                        )
+                        for name, prop in param_schema.items()
+                    },
+                    required=[r for r in required if r in param_schema],
+                ),
+            )
+                
+            tool_obj = genai_types.Tool(
+                function_declarations=[func_decl])
+                
+            gemini_tools.append(tool_obj)
+        print(gemini_tools)
+        return gemini_tools
+    except ImportError:
+        raise ImportError(
+            "Google generativeai library required. Install with:\n"
+            "pip install google-generativeai"
+        )
+
+def chat_with_gemini_tools(
+        model_name: str,
+        api_key: str,
+        messages: list[dict],
+        max_tool_calls: int = 5
+    ) -> Optional[str]:
+        """
+        Args:
+            model_name: Gemini model name (e.g., "gemini-2.0-flash")
+            api_key: Google API key
+            messages: List of message dicts with "role" and "content"
+            max_tool_calls: Maximum number of tool call iterations
+
+        """
+        try:
+            import google.genai as genai
+            from google.genai import types as genai_types
+            
+            client = genai.Client(api_key=api_key)
+            
+            gemini_tools = convert_openai_tools_to_gemini()
+            
+            contents = []
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                
+                # Gemini expects "user" or "model" roles
+                if role == "system":
+                    # Prepend system message to first user message
+                    if not contents:
+                        contents.append(
+                            genai_types.Content(role="user", parts=[content])
+                        )
+                    else:
+                        contents[0].parts.insert(0, content)
+                else:
+                    gemini_role = "model" if role == "assistant" else "user"
+                    contents.append(
+                        genai_types.Content(role=gemini_role, parts=[content])
+                    )
+            
+            tool_call_count = 0
+            
+            while tool_call_count < max_tool_calls:
+                print(f"\n[Gemini Call #{tool_call_count + 1}]")
+                
+                # Generate response with tools
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    tools=gemini_tools,
+                    config=genai_types.GenerateContentConfig(
+                        temperature=0.7,
+                    ),
+                )
+                
+                print(f"Response finish reason: {response.candidates[0].finish_reason}")
+                
+                # Check if model wants to use tools
+                if response.candidates[0].finish_reason == genai_types.FinishReason.TOOL_USE:
+                    print("Model using tools...")
+                    
+                    # Extract tool calls from response
+                    tool_uses = []
+                    for part in response.candidates[0].content.parts:
+                        if isinstance(part, genai_types.FunctionCall):
+                            tool_uses.append(part)
+                    
+                    if not tool_uses:
+                        print("No tool calls found despite TOOL_USE finish reason")
+                        break
+                    
+                    # Add assistant response to contents
+                    contents.append(response.candidates[0].content)
+                    
+                    # Execute tools
+                    tool_results = []
+                    
+                    for tool_use in tool_uses:
+                        tool_name = tool_use.name
+                        tool_args = tool_use.args
+                        
+                        print(f"  → Executing: {tool_name}({tool_args})")
+                        
+                        # Execute from registry
+                        if tool_name in TOOL_REGISTRY:
+                            try:
+                                result = TOOL_REGISTRY[tool_name](**tool_args)
+                            except TypeError as e:
+                                result = f"ERROR: Invalid arguments - {str(e)}"
+                        else:
+                            result = f"ERROR: Unknown tool {tool_name}"
+                        
+                        print(f"  ← Result: {result[:100]}...")
+                        
+                        # Create tool result
+                        tool_results.append(
+                            genai_types.FunctionResponse(
+                                name=tool_name,
+                                response={"result": result}
+                            )
+                        )
+                    
+                    # Add tool results to contents
+                    contents.append(
+                        genai_types.Content(
+                            role="user",
+                            parts=tool_results
+                        )
+                    )
+                    
+                    tool_call_count += 1
+                    # Continue loop to let model process results
+                
+                else:
+                    # No more tool calls, return text response
+                    text = response.candidates[0].content.parts[0].text
+                    print(f"\n[Final Response]\n{text[:100]}...")
+                    return text
+            
+            # Max tool calls reached
+            print(f"Max tool calls ({max_tool_calls}) reached")
+            return response.candidates[0].content.parts[0].text
+        
+        except ImportError as e:
+            print(f"ERROR: {e}")
+            return None
+        except Exception as e:
+            print(f"ERROR: {str(e)}")
+            return None
+
+
+
+# ============================================================
 # EXAMPLE USAGE & ENVIRONMENT SETUP GUIDE
 # ============================================================
 
