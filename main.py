@@ -861,7 +861,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                     generation_config={
                         "thinking_level": thinking_level,
                         "temperature": 0.7,
-                        "tool_choice": "any"
+                        "tool_choice": "auto"
                     },
                     previous_interaction_id=interaction_id if interaction_id is not None else Omit()
                 )
