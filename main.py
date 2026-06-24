@@ -27,6 +27,7 @@ MODEL_TIMEOUT_SEC = 120
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_TIMEOUT_SEC = 120
 GEMINI_MAX_TRIES = 2
+global_interaction_id = None
 SAFE_MSG_LIMIT = 3800
 
 logging.basicConfig(
@@ -213,7 +214,9 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"User_prompt: {update.effective_message.text}")
     prompt = [
         {"role": "system", "content": 
-            """\
+            f"""\
+            Current Date: {datetime.date.today()}    
+            
             You are an autonomous crypto/DeFi market intelligence agent designed to ingest high-volume information (news, on-chain data, pricing, macro) and produce the highest-signal actionable insights through multi-layer analysis + simulation-style reasoning used by experienced crypto operators for years.
             You are not a hype narrator. You are a disciplined intelligence system that:
             - detects repeating behaviors and regime shifts,
@@ -463,6 +466,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 "required": ["code"]
             }
         },
+        
         {
             "type": "function",
             "name": "web_search",
@@ -488,10 +492,11 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 "required": ["query", "engine"]
             }
         },
+        
         {
             "type": "function",
             "name": "read_website_html_at_url",
-            "description": "Fetch and return HTML content from a URL.",
+            "description": "Fetch and return HTML content from a URL or Free api endpoint if provided.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -502,6 +507,10 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 },
                 "required": ["url"]
             }
+        },
+        
+        {
+            "type": "google_search",
         }
     ]
     
@@ -830,13 +839,16 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         return None
        
     def _call_gemini_sync(model_name: str, api_key: str, prompt: list[dict], thinking_level: str = "high", max_tool_calls: int = 10) -> Optional[str]:
+        global global_interaction_id
         try:
             import google.genai as genai
+            from google.genai._interactions import Omit
             client = genai.Client(api_key=api_key)
             
             system_instructions, user_input = _build_input_from_prompt(prompt) 
             print(f"[Gemini Interaction] Model: {model_name}, Thinking: {thinking_level}")
             
+            interaction_id = global_interaction_id
             tool_call_count = 0
             while tool_call_count < max_tool_calls:
                 print(f"\n[API Call #{tool_call_count + 1}]")
@@ -844,23 +856,33 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 interaction = client.interactions.create(
                     model=model_name,
                     input=user_input,
-                    system_instruction=system_instructions if system_instructions else None,
+                    system_instruction=system_instructions if system_instructions else Omit(),
                     tools=TOOLS, 
                     generation_config={
                         "thinking_level": thinking_level,
                         "temperature": 0.7,
+                        "tool_choice": "any"
                     },
-                    previous_interaction_id=interaction_id if interaction_id else None
+                    previous_interaction_id=interaction_id if interaction_id is not None else Omit()
                 )
                 
                 interaction_id = interaction.id
                 has_tool_calls = False
                 final_text = None
+                length = len(interaction.steps)
                 print(f"{interaction}\n\n")
                 
                 for step in interaction.steps:
-                    print(f"Model wants to use {len(interaction.steps)} tool(s)")
+                    if step.type == 'thought':
+                        length = length - 1
+                    if step.type == 'content':
+                        length = length - 1
+                    if step.type == 'model_output':
+                        length = length -1
+                        
+                    
                     if step.type == "function_call":
+                        print(f"Model wants to use {length} tool(s)")
                         print(step.name)
                         has_tool_calls = True
                         result = _execute_tool_call(step)
@@ -877,6 +899,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 if not has_tool_calls and final_text is not None:
                     print(f"\n[Complete] Iterations: {tool_call_count + 1}")
+                    global_interaction_id = interaction_id
                     return final_text
                 
                 if has_tool_calls:
@@ -894,6 +917,7 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
             print("Install with: pip install google-generativeai")
             return None
         except Exception as e:
+            global_interaction_id = interaction_id
             print(f"ERROR: {str(e)}")
             import traceback
             traceback.print_exc()
@@ -989,7 +1013,6 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
                     text=(
                         f"⚠️ Part of the output failed to send "
                         f"(chunk(s) {failed_chunks} of {len(chunks)}) — "
-                        "please use /rawsignals for full data."
                     ),
                     parse_mode=None,
                     disable_web_page_preview=True,
@@ -1074,14 +1097,14 @@ async def response(update: tg.Update, context: ContextTypes.DEFAULT_TYPE):
         
     if gemini_key:
         try:
-            result = await _call_gemini(prompt, hf_key, AI_MODEL)
+            result = await _call_gemini(prompt, gemini_key, GEMINI_MODEL)
         except Exception as exc:
             logger.warning(f"Gemini model raised error: {exc}")
             await context.bot.set_message_reaction(update.effective_user.id, update.effective_message.id, reaction= [tg.ReactionTypeEmoji('😢')])
             await update.message.reply_text(text=f"AI model raised error: {exc}\nPlease try the prompt again.", do_quote= True)
             result = None
         if result is not None:
-            await _safe_reply(update, context, result, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=False)
+            await _safe_reply(update, context, result, parse_mode=None, disable_web_page_preview=False)
         
     return RESPONSE
     
