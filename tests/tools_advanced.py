@@ -522,7 +522,6 @@ def _get_db_client() -> DatabaseClient:
         _db_client = DatabaseClient()
     return _db_client
 
-
 def query_database(query: str, table: str, limit: int = 100) -> str:
     """
     Query your database.
@@ -634,7 +633,6 @@ def chat_with_gemini_tools(
         traceback.print_exc()
         return None
 
-
 def _build_input_from_messages(messages: list[dict]) -> tuple[str, str]:
     system_instructions = ""
     user_parts = []
@@ -656,7 +654,6 @@ def _build_input_from_messages(messages: list[dict]) -> tuple[str, str]:
     user_input = "\n\n".join(user_parts) if user_parts else ""
     
     return system_instructions, user_input
-
 
 def _execute_tool_call(step) -> str:
     try:
@@ -944,11 +941,6 @@ Database (PostgreSQL example):
   Query: "SELECT * FROM crypto_prices WHERE symbol='BTC' ORDER BY timestamp DESC"
   Table: "crypto_prices"
 """
-
-
-# ============================================================
-# TESTING
-# ============================================================
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
