@@ -752,95 +752,70 @@ def convert_openai_tools_to_gemini():
     except ImportError:
         raise ImportError(
             "Google generativeai library required. Install with:\n"
-            "pip install google-generativeai"
+            "pip install google-genai"
         )
 
-def chat_with_gemini_tools(
-        model_name: str,
-        api_key: str,
-        messages: list[dict],
-        max_tool_calls: int = 5
-    ) -> Optional[str]:
-        """
-        Args:
-            model_name: Gemini model name (e.g., "gemini-2.0-flash")
-            api_key: Google API key
-            messages: List of message dicts with "role" and "content"
-            max_tool_calls: Maximum number of tool call iterations
-
-        """
-        try:
-            import google.genai as genai
-            from google.genai import types as genai_types
+def chat_with_gemini_tools(model_name: str, api_key: str, messages: list[dict], max_tool_calls: int = 5) -> Optional[str]:
+    try:
+        import google.genai as genai
+        from google.genai import types as genai_types
+        
+        client = genai.Client(api_key=api_key)
+        gemini_tools = convert_openai_tools_to_gemini()     
+        system_instructions, user_parts =_build_input_from_messages(messages)
+        tool_response = None
+        assistant_response = None
+        
+        user_input = genai_types.Content(
+            role='user',
+            parts=[genai_types.Part.from_text(text=user_parts)],
+        )
             
-            client = genai.Client(api_key=api_key)
+        tool_call_count = 0
             
-            gemini_tools = convert_openai_tools_to_gemini()
-            
-            contents = []
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                
-                # Gemini expects "user" or "model" roles
-                if role == "system":
-                    # Prepend system message to first user message
-                    if not contents:
-                        contents.append(
-                            genai_types.Content(role="user", parts=[content])
-                        )
-                    else:
-                        contents[0].parts.insert(0, content)
-                else:
-                    gemini_role = "model" if role == "assistant" else "user"
-                    contents.append(
-                        genai_types.Content(role=gemini_role, parts=[content])
-                    )
-            
-            tool_call_count = 0
-            
-            while tool_call_count < max_tool_calls:
-                print(f"\n[Gemini Call #{tool_call_count + 1}]")
+        while tool_call_count < max_tool_calls:
+            print(f"\n[Gemini Call #{tool_call_count + 1}]")
                 
                 # Generate response with tools
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    tools=gemini_tools,
-                    config=genai_types.GenerateContentConfig(
-                        temperature=0.7,
-                    ),
+            response = client.models.generate_content(
+                model=model_name,
+                contents=[
+                    user_input,
+                    assistant_response if assistant_response is not None else "",
+                    tool_response if tool_response is not None else ""
+                ],
+                tools=gemini_tools,
+                config=genai_types.GenerateContentConfig(
+                    system_instructions= system_instructions if system_instructions else None,
+                    tools= gemini_tools,
+                    thinking_config= genai_types.ThinkingConfig(thinking_level="high"),
+                    temperature= 0.7,
                 )
+            )
                 
-                print(f"Response finish reason: {response.candidates[0].finish_reason}")
+            print(response.candidate[0].content)
+            print(f"Response finish reason: {response.candidates[0].finish_reason}")
                 
-                # Check if model wants to use tools
-                if response.candidates[0].finish_reason == genai_types.FinishReason.TOOL_USE:
-                    print("Model using tools...")
-                    
-                    # Extract tool calls from response
-                    tool_uses = []
-                    for part in response.candidates[0].content.parts:
-                        if isinstance(part, genai_types.FunctionCall):
-                            tool_uses.append(part)
-                    
+            if response.candidates[0].finish_reason == genai_types.FinishReason.TOOL_USE:
+                print("Model using tools...")
+                
+                tool_uses = []
+                for part in response.candidates[0].content.parts:
+                    if isinstance(part, genai_types.FunctionCall):
+                        tool_uses.append(part)
+                        
                     if not tool_uses:
                         print("No tool calls found despite TOOL_USE finish reason")
                         break
-                    
-                    # Add assistant response to contents
-                    contents.append(response.candidates[0].content)
-                    
-                    # Execute tools
+                        
+                    assistant_response = response.candidates[0].content
                     tool_results = []
-                    
+                        
                     for tool_use in tool_uses:
                         tool_name = tool_use.name
                         tool_args = tool_use.args
-                        
+                            
                         print(f"  → Executing: {tool_name}({tool_args})")
-                        
-                        # Execute from registry
                         if tool_name in TOOL_REGISTRY:
                             try:
                                 result = TOOL_REGISTRY[tool_name](**tool_args)
@@ -848,44 +823,34 @@ def chat_with_gemini_tools(
                                 result = f"ERROR: Invalid arguments - {str(e)}"
                         else:
                             result = f"ERROR: Unknown tool {tool_name}"
-                        
+                            
                         print(f"  ← Result: {result[:100]}...")
-                        
-                        # Create tool result
+                            
                         tool_results.append(
                             genai_types.FunctionResponse(
                                 name=tool_name,
                                 response={"result": result}
                             )
                         )
-                    
-                    # Add tool results to contents
-                    contents.append(
-                        genai_types.Content(
-                            role="user",
-                            parts=tool_results
-                        )
+                        
+                    tool_response = genai_types.Content(
+                        role="tool",
+                        parts=tool_results
                     )
-                    
+                        
                     tool_call_count += 1
-                    # Continue loop to let model process results
-                
-                else:
-                    # No more tool calls, return text response
-                    text = response.candidates[0].content.parts[0].text
-                    print(f"\n[Final Response]\n{text[:100]}...")
-                    return text
-            
-            # Max tool calls reached
-            print(f"Max tool calls ({max_tool_calls}) reached")
-            return response.candidates[0].content.parts[0].text
-        
-        except ImportError as e:
-            print(f"ERROR: {e}")
-            return None
-        except Exception as e:
-            print(f"ERROR: {str(e)}")
-            return None
+            else:
+                text = response.candidates[0].content.parts[0].text
+                print(f"\n[Final Response]\n{text[:100]}...")
+                return text
+        print(f"Max tool calls ({max_tool_calls}) reached")
+        return response.candidates[0].content.parts[0].text
+    except ImportError as e:
+        print(f"ERROR: {e}")
+        return None
+    except Exception as e:
+        print(f"ERROR: {str(e)}")
+        return None
 
 
 
